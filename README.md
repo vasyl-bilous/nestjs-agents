@@ -1,7 +1,7 @@
 # nestjs-agents
 
 > **Production-grade Claude Code subagents specialized for NestJS development.**
-> Code review, testing, security, architecture — with `git diff` scoping built-in.
+> Code review, testing, security, architecture — scoped to your recent work (uncommitted + last commit).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-Compatible-7C3AED)](https://docs.claude.com/en/docs/claude-code/sub-agents)
@@ -16,7 +16,7 @@ Generic AI coding agents don't know about NestJS-specific patterns:
 - **Transactional outbox** patterns for Stripe / RabbitMQ events
 - **Validation pipelines** with `class-validator` DTOs
 
-This collection gives Claude Code that context — and **scopes every review/test action to `git diff`**, so agents act on what you just wrote, not the entire codebase.
+This collection gives Claude Code that context — and **scopes every review/test action to your recent work** (uncommitted changes + last commit), so agents act on what you just wrote, not the entire codebase.
 
 ## What's inside
 
@@ -26,7 +26,7 @@ This collection gives Claude Code that context — and **scopes every review/tes
 | **`nestjs-test-writer`** | Writes Jest unit / integration tests for changed components | ❌ Writes test files | "add tests", "cover with tests" |
 | **`nestjs-security-auditor`** | Maps changes to OWASP Top 10 + NestJS-specific traps | ✅ Yes | "security audit", "audit auth flow" |
 | **`nestjs-architect`** | Architecture consultant — DDD, hexagonal, microservices, transactional outbox | ✅ Yes | "design this feature", "should I split into microservices" |
-| **`nestjs-repository-expert`** | Builds entities, repositories, migrations (TypeORM/Prisma) | ❌ Writes code | "create entity", "add migration", "optimize query" |
+| **`nestjs-repository-expert`** | Builds entities, schemas, repositories, migrations (TypeORM / Prisma / Mongoose) | ❌ Writes code | "create entity", "add migration", "optimize query" |
 | **`nestjs-service-expert`** | Implements service layer — business logic, SOLID, error handling | ❌ Writes code | "create service", "implement use case" |
 | **`nestjs-controller-expert`** | Creates controllers, DTOs, endpoints, Swagger docs | ❌ Writes code | "add endpoint", "create controller", "add DTO" |
 
@@ -147,12 +147,21 @@ After installing, **restart Claude Code** to pick up the new agents. Verify with
 
 Every agent in this collection follows these rules:
 
-### 1. `git diff` is the scope
+### 1. Recent work is the scope
 
-Every action-taking agent (reviewer, auditor, test-writer) **first runs `git diff` to find changed files** and operates only on those. This prevents:
+Every action-taking agent (reviewer, auditor, test-writer, even the code-writers when iterating) starts with the same three commands to find what you've been working on:
+
+```bash
+git status --short                  # uncommitted (staged + unstaged + untracked)
+git diff HEAD                       # full diff of uncommitted changes
+git diff HEAD~1 HEAD                # the last commit
+```
+
+The union of these is the agent's scope — it operates on **what you've recently touched**, not the rest of the repo. This prevents:
 - Polluting your main agent's context with unrelated files
 - Reviewing thousands of lines when you only changed 10
 - "Drift" between what you intended and what the agent did
+- Missing staged changes (a common bug when an agent only checks `git diff` without `HEAD`)
 
 ### 2. Read-only where possible
 
@@ -184,11 +193,64 @@ Findings always look like:
 
 Not vague advice like "improve error handling".
 
+### 5. `model: inherit` — agents follow your main session
+
+Every agent is configured with `model: inherit` in its frontmatter. This means:
+
+- The agent runs on **whatever model your main Claude Code session is using** — Opus, Sonnet, or Haiku.
+- You stay in control of cost / capability trade-offs from one place (your main `/model` setting), no need to edit each agent.
+- The library works across all subscription tiers — Pro users (no Opus) get Sonnet automatically; Max / API users on Opus get Opus.
+- **Always running on the latest available model.** When Anthropic ships a new generation (e.g., Opus 5), you don't need to re-edit any frontmatter — agents pick up the upgrade the moment your main session does.
+
+If you want to pin an agent to a specific model (e.g., always run `nestjs-architect` on Opus regardless of main session), change `model: inherit` to `model: opus` / `model: sonnet` in that one file. We don't recommend it for the shared library, but it's a one-line override per agent if you need it.
+
+## Recommended CLAUDE.md setup (auto-delegation)
+
+Once the agents are installed, Claude Code can already route work to them automatically based on each agent's `description` and trigger phrases — you can just say *"review my changes"* and `nestjs-code-reviewer` runs.
+
+But you'll get **much more reliable routing** if you add a short `CLAUDE.md` to your project that tells the main session which agent owns which part of the work. This turns soft hints (description matching) into hard rules ("always do X after Y").
+
+Drop this into your project's root `CLAUDE.md` (or append to an existing one):
+
+````markdown
+## NestJS subagent workflow
+
+This project uses specialized NestJS subagents. Route work to them as follows:
+
+**When designing (BEFORE writing code):**
+- Architecture / module boundaries / pattern questions → `nestjs-architect`
+
+**When implementing:**
+- HTTP endpoint, DTO, Swagger docs → `nestjs-controller-expert`
+- Business logic, use case, service-layer code → `nestjs-service-expert`
+- Entity / schema, repository, migration, query optimization → `nestjs-repository-expert`
+
+Don't write controller + service + repository in a single main-session turn —
+delegate each layer to its specialized agent so layer boundaries stay clean.
+
+**After implementing (run before committing):**
+1. `nestjs-code-reviewer` — review the recent diff for bugs, anti-patterns, missing transactions
+2. If reviewer flags 🔴 critical findings — fix them before continuing
+3. `nestjs-test-writer` — add Jest unit / integration tests for the changes
+4. For changes touching **auth, payments, user data, or external APIs** — also run `nestjs-security-auditor`
+
+**When NOT to delegate:**
+- One-line typo fixes or rename refactors — just edit directly
+- Scratch / experiment files outside `src/` — agents are for production code
+````
+
+**Why this works better than relying on auto-delegation alone:**
+- Claude Code treats `CLAUDE.md` instructions as **must-follow rules**, not suggestions — so the post-implementation review/test cycle actually happens every time, not "when the description happens to match"
+- The mapping is **explicit per layer**, which prevents the main session from writing controller + service + repo in one shot (a common quality drop)
+- Security audits get triggered **based on what changed**, not on whether the user remembered to ask
+
+You can extend this further with project-specific rules (e.g., "always use `nestjs-architect` for changes touching the billing module") — the agents will pick up any extra context you give the main session.
+
 ## Compatibility
 
-- Claude Code v1.0+
+- Claude Code v1.0+ (any model — agents inherit from your main session)
 - NestJS v9, v10, v11
-- TypeORM and Prisma both supported
+- TypeORM, Prisma, and Mongoose (MongoDB) all supported
 - Jest (default) and Vitest (with adaptations)
 
 ## Contributing
@@ -199,8 +261,8 @@ PRs welcome — especially:
 - Additional anti-pattern examples from real projects
 
 Please follow the existing format:
-- YAML frontmatter (`name`, `description` with triggers, `tools`, `model`)
-- `Step 1: Identify scope` with `git diff`
+- YAML frontmatter (`name`, `description` with triggers, `tools`, `model: inherit`)
+- `Step 1: Identify scope` using the standard 3-command pattern (`git status --short`, `git diff HEAD`, `git diff HEAD~1 HEAD`)
 - `What NOT to do` section
 - Concrete output format example
 
